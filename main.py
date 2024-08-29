@@ -134,6 +134,14 @@ class TagGenerator:
             # Write the updated content back to the file
             with open(filepath, "w") as f:
                 f.write(content)
+        else:
+            print("No frontmatter found")
+            # Add frontmatter if it doesn't exist
+            updated_tags_str = "\n".join([f"  - {tag}" for tag in sorted(new_tags)])
+            updated_frontmatter = f"---\ntags:\n{updated_tags_str}\n---\n"
+            content = updated_frontmatter + content
+            with open(filepath, "w") as f:
+                f.write(content)
 
 
 
