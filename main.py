@@ -59,7 +59,7 @@ class TagGenerator:
     def _api_call(self, solution_code):
         system_message = (
             "You are interacting with a user looking to categorize, within the Obsidian note-taking application, solutions to coding problems such as those typically found on LeetCode. Generate tags to be used to categorize the solutions for the provided solution code. Output the tags, and your reasoning for choosing them, in JSON format. Do not reference the program language as a tag. "
-            f"Use the following JSON object of tags to help with your categorization:\n{self.topics}"
+            f"Use the following JSON array of tags to help with your categorization, but feel free to add tags not included in the array:\n{self.topics}"
         )
 
         messages = [
