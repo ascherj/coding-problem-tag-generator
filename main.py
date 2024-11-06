@@ -11,6 +11,7 @@ _ = load_dotenv(find_dotenv()) # read local .env file
 
 LEETCODE_PROBLEM_DIR = os.getenv("LEETCODE_PROBLEM_DIR")
 PROCESSED_FILES_LOG = "processed_files.json"
+TOPICS_FILE = "topics.json"
 
 class TagGenerator:
 
@@ -22,7 +23,7 @@ class TagGenerator:
         self.selected_problem = None
 
     def _load_topics(self) -> list[str]:
-        with open("topics.json", "r") as f:
+        with open(TOPICS_FILE, "r") as f:
             return json.load(f)
 
     def _list_problems(self) -> list[str]:
@@ -144,6 +145,18 @@ class TagGenerator:
                 f.write(content)
 
 
+    def _update_topics_file(self, problem_tags):
+        all_tags = list(set(self.topics + problem_tags))
+        all_tags.sort()
+
+        new_tags = [tag for tag in all_tags if tag not in self.topics]
+        print(f"Added {len(new_tags)} new tags to {TOPICS_FILE} file: {new_tags}")
+
+        with open(TOPICS_FILE, "w") as f:
+            try:
+                json.dump(all_tags, f, indent=4)
+            except Exception as e:
+                print(f"Error updating topics file: {e}")
 
     def get_tags_for_solution(self) -> dict:
         if self.problems:
@@ -157,13 +170,21 @@ class TagGenerator:
                 file_contents = f.read()
 
             try:
-                solution_code = file_contents.split("```python")[1]
+                solution_code = ""
+                code_blocks = re.findall(r"```python(.*?)```", file_contents, re.DOTALL)
+                for block in code_blocks:
+                    solution_code += block.strip() + "\n"
+                solution_code = solution_code.strip()
+
+                print(f"Solution code:\n{solution_code}")
+
                 tags_json = self._api_call(solution_code)
                 print(tags_json)
                 tags = json.loads(tags_json).get("tags", [])
                 tags = [tag.lower().replace(" ", "-") for tag in tags]
                 self._update_frontmatter_tags(filepath, tags)
                 self._save_processed_file(self.selected_problem)
+                self._update_topics_file(tags)
                 print(f"Updated tags for {self.selected_problem}: {tags}")
             except IndexError:
                 print("No code block found in the file")
