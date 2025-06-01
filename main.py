@@ -7,7 +7,7 @@ from openai import OpenAI
 from dotenv import load_dotenv, find_dotenv
 
 client = OpenAI()
-_ = load_dotenv(find_dotenv()) # read local .env file
+load_dotenv(find_dotenv(), override=True)  # Force reload local .env file
 
 LEETCODE_PROBLEM_DIR = os.getenv("LEETCODE_PROBLEM_DIR")
 PROCESSED_FILES_LOG = "processed_files.json"
@@ -57,9 +57,26 @@ class TagGenerator:
         answers = inquirer.prompt(questions)
         return answers["problem"]
 
+    def _select_processing_mode(self):
+        """Select whether to process a single file or all files"""
+        questions = [
+            inquirer.List(
+                "mode",
+                message="What would you like to do?",
+                choices=[
+                    "Process single unprocessed file",
+                    "Process all unprocessed files",
+                    "Regenerate tags for all files (including processed ones)"
+                ]
+            )
+        ]
+
+        answers = inquirer.prompt(questions)
+        return answers["mode"]
+
     def _api_call(self, solution_code):
         system_message = (
-            "You are interacting with a user looking to categorize, within the Obsidian note-taking application, solutions to coding problems such as those typically found on LeetCode. Generate tags to be used to categorize the solutions for the provided solution code. Output the tags, and your reasoning for choosing them, in JSON format. Do not reference the program language as a tag. "
+            "You are interacting with a user looking to categorize, within the Obsidian note-taking application, solutions to coding problems such as those typically found on LeetCode. Generate tags to be used to categorize the solutions for the provided solution code. Output the tags, and your reasoning for choosing each tag, in JSON format. Do not reference the program language as a tag. "
             f"Use the following JSON array of tags to help with your categorization, but feel free to add tags not included in the array:\n{self.topics}"
         )
 
@@ -75,7 +92,7 @@ class TagGenerator:
             ]
 
         response = client.chat.completions.create(
-            model="gpt-4o-mini",
+            model="gpt-4o",
             messages=messages,
             temperature=0.3,
             max_tokens=256,
@@ -89,7 +106,75 @@ class TagGenerator:
 
         return response.choices[0].message.content
 
+    def _process_single_file(self, filename):
+        """Process a single file and return success status"""
+        try:
+            filepath = os.path.join(self.problem_directory, filename)
 
+            with open(filepath, "r") as f:
+                file_contents = f.read()
+
+            # Extract solution code from Python code blocks
+            solution_code = ""
+            code_blocks = re.findall(r"```python(.*?)```", file_contents, re.DOTALL)
+            for block in code_blocks:
+                solution_code += block.strip() + "\n"
+            solution_code = solution_code.strip()
+
+            if not solution_code:
+                print(f"⚠️  No Python code block found in {filename}")
+                return False
+
+            print(f"🔄 Processing: {filename}")
+
+            # Get tags from API
+            tags_json = self._api_call(solution_code)
+            print(f"📋 API Response: {tags_json}")  # Show the full response including reasoning
+
+            tags_data = json.loads(tags_json)
+            tags = tags_data.get("tags", [])
+            tags = [tag.lower().replace(" ", "-") for tag in tags]
+
+            # Update file and tracking
+            self._update_frontmatter_tags(filepath, tags)
+            self._save_processed_file(filename)
+            self._update_topics_file(tags)
+
+            print(f"✅ Updated tags for {filename}: {tags}")
+            return True
+
+        except Exception as e:
+            print(f"❌ Error processing {filename}: {str(e)}")
+            return False
+
+    def process_all_files(self, regenerate=False):
+        """Process all files, optionally regenerating already processed ones"""
+        if regenerate:
+            files_to_process = self.problems
+            print(f"🚀 Regenerating tags for all {len(files_to_process)} files...")
+        else:
+            files_to_process = [p for p in self.problems if p not in self.processed_files]
+            print(f"🚀 Processing {len(files_to_process)} unprocessed files...")
+
+        if not files_to_process:
+            print("✨ No files to process!")
+            return
+
+        successful = 0
+        failed = 0
+
+        for i, filename in enumerate(files_to_process, 1):
+            print(f"\n📁 [{i}/{len(files_to_process)}] Processing {filename}")
+
+            if self._process_single_file(filename):
+                successful += 1
+            else:
+                failed += 1
+
+        print(f"\n🎉 Bulk processing complete!")
+        print(f"✅ Successfully processed: {successful}")
+        print(f"❌ Failed: {failed}")
+        print(f"📊 Total files: {len(files_to_process)}")
 
     def _update_frontmatter_tags(self, filepath, new_tags):
         with open(filepath, "r") as f:
@@ -144,13 +229,16 @@ class TagGenerator:
             with open(filepath, "w") as f:
                 f.write(content)
 
-
     def _update_topics_file(self, problem_tags):
         all_tags = list(set(self.topics + problem_tags))
         all_tags.sort()
 
         new_tags = [tag for tag in all_tags if tag not in self.topics]
-        print(f"Added {len(new_tags)} new tags to {TOPICS_FILE} file: {new_tags}")
+        if new_tags:
+            print(f"📝 Added {len(new_tags)} new tags to {TOPICS_FILE}: {new_tags}")
+
+        # Update the instance variable so subsequent calls see the new tags
+        self.topics = all_tags
 
         with open(TOPICS_FILE, "w") as f:
             try:
@@ -159,35 +247,26 @@ class TagGenerator:
                 print(f"Error updating topics file: {e}")
 
     def get_tags_for_solution(self) -> dict:
-        if self.problems:
+        if not self.problems:
+            print("No problem files found!")
+            return
+
+        # Get processing mode from user
+        mode = self._select_processing_mode()
+
+        if mode == "Process single unprocessed file":
+            # Original single file processing
             self.selected_problem = self._select_problem(self.problems)
-            print(f"Selected problem: {self.selected_problem}")
+            if self.selected_problem:
+                self._process_single_file(self.selected_problem)
 
-            file_contents = None
-            filepath = os.path.join(self.problem_directory, self.selected_problem)
-            with open(filepath, "r") as f:
-                print(f"Reading problem: {self.selected_problem}")
-                file_contents = f.read()
+        elif mode == "Process all unprocessed files":
+            # Process all unprocessed files
+            self.process_all_files(regenerate=False)
 
-            try:
-                solution_code = ""
-                code_blocks = re.findall(r"```python(.*?)```", file_contents, re.DOTALL)
-                for block in code_blocks:
-                    solution_code += block.strip() + "\n"
-                solution_code = solution_code.strip()
-
-                print(f"Solution code:\n{solution_code}")
-
-                tags_json = self._api_call(solution_code)
-                print(tags_json)
-                tags = json.loads(tags_json).get("tags", [])
-                tags = [tag.lower().replace(" ", "-") for tag in tags]
-                self._update_frontmatter_tags(filepath, tags)
-                self._save_processed_file(self.selected_problem)
-                self._update_topics_file(tags)
-                print(f"Updated tags for {self.selected_problem}: {tags}")
-            except IndexError:
-                print("No code block found in the file")
+        elif mode == "Regenerate tags for all files (including processed ones)":
+            # Process all files, including already processed ones
+            self.process_all_files(regenerate=True)
 
 
 if __name__ == "__main__":
